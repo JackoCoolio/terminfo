@@ -32,5 +32,6 @@ test "getStringBySlice" {
     const term_info = (try TermInfo.initFromFile(std.testing.allocator, "/usr/share/terminfo/a/adm3a")).Regular;
     defer term_info.deinit();
 
-    try std.testing.expectEqualSlices(u8, term_info.strings.getStringByField(.bell), &[_]u8{0x07});
+    try std.testing.expectEqualSlices(u8, term_info.strings.getStringByField(.bell).?, &[_]u8{0x07});
+    try std.testing.expectEqualSlices(u8, term_info.strings.getStringByField(.cursor_address).?, &[_]u8{0x1b} ++ "=%p1%' '%+%c%p2%' '%+%c");
 }
