@@ -21,9 +21,9 @@ pub fn deinit(self: @This()) void {
     self.table.deinit();
 }
 
-pub fn getStringByField(self: *const Self, comptime field: Capabilities.Field()) []const u8 {
+pub fn getStringByField(self: *const Self, comptime field: Capabilities.Field()) ?[]const u8 {
     const field_name = @tagName(field);
-    const slice = @field(self.capabilities, field_name) orelse unreachable;
+    const slice = @field(self.capabilities, field_name) orelse return null;
     return self.table.getStringFromSlice(slice);
 }
 
