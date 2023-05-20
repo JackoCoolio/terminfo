@@ -1,6 +1,9 @@
 const std = @import("std");
 const Strings = @import("Strings.zig");
 
+pub const ExtendedTermInfo = SizedTermInfo(i32);
+pub const RegularTermInfo = SizedTermInfo(i16);
+
 /// A TermInfo struct
 pub fn SizedTermInfo(comptime N: type) type {
     return struct {
