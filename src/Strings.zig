@@ -23,7 +23,7 @@ pub fn deinit(self: @This()) void {
 
 test "string capabilities" {
     const TermInfo = @import("main.zig").TermInfo;
-    const term_info = (try TermInfo.initFromFile(std.testing.allocator, "/usr/share/terminfo/a/adm3a")).Regular;
+    const term_info = try TermInfo.initFromFile(std.testing.allocator, "/usr/share/terminfo/a/adm3a");
     defer term_info.deinit();
 
     try std.testing.expectEqualSlices(u8, term_info.strings.capabilities.bell.?, &[_]u8{0x07});

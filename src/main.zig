@@ -1,82 +1,36 @@
 const std = @import("std");
 const Strings = @import("Strings.zig");
 
-pub const ExtendedTermInfo = SizedTermInfo(i32);
-pub const RegularTermInfo = SizedTermInfo(i16);
-
 /// A TermInfo struct
-pub fn SizedTermInfo(comptime N: type) type {
-    return struct {
-        const Self = @This();
+pub const TermInfo = struct {
+    const Self = @This();
 
-        names: Names,
-        bool_capabilities: BooleanCapabilities,
-        num_capabilities: NumericCapabilities(N),
-        strings: Strings,
-        size: usize,
+    const Type = enum {
+        Regular,
+        Extended,
 
-        /// Deinitializes and frees memory.
-        pub fn deinit(self: Self) void {
-            self.names.deinit();
-            self.strings.deinit();
-        }
-
-        /// Returns a 4-byte integer version of this terminfo.
-        pub fn intoExtended(self: Self) SizedTermInfo(i32) {
-            return .{
-                .names = self.names,
-                .bool_capabilities = self.bool_capabilities,
-                .num_capabilities = self.num_capabilities.intoExtended(),
-                .strings = self.strings,
-                .size = self.size,
+        pub fn getIntWidth(self: Type) usize {
+            return switch (self) {
+                .Regular => 2, // i16
+                .Extended => 4, // i32
             };
         }
     };
-}
 
-pub const TermInfoType = enum {
-    const Self = @This();
-
-    Regular,
-    Extended,
-
-    pub fn getIntWidth(self: Self) usize {
-        return switch (self) {
-            .Regular => @sizeOf(i16),
-            .Extended => @sizeOf(i32),
-        };
-    }
-
-    pub fn getIntType(comptime self: Self) type {
-        return switch (self) {
-            .Regular => i16,
-            .Extended => i32,
-        };
-    }
-
-    pub fn getSizedType(comptime self: Self) type {
-        return SizedTermInfo(self.getIntType());
-    }
-};
-
-pub const TermInfo = union(TermInfoType) {
-    const Self = @This();
-
-    Regular: SizedTermInfo(i16),
-    Extended: SizedTermInfo(i32),
+    names: Names,
+    bool_capabilities: BooleanCapabilities,
+    num_capabilities: NumericCapabilities,
+    strings: Strings,
+    size: usize,
 
     pub fn getNames(self: *const Self) *const Names {
-        return switch (self) {
-            .Regular => |ti| ti.names,
-            .Extended => |ti| ti.names,
-        };
+        return &self.names;
     }
 
-    pub fn intoExtended(self: Self) SizedTermInfo(i32) {
-        return switch (self) {
-            .Regular => |ti| ti.intoExtended(),
-            .Extended => |ti| ti,
-        };
+    /// Deinitializes and frees memory.
+    pub fn deinit(self: Self) void {
+        self.names.deinit();
+        self.strings.deinit();
     }
 
     pub const InitFromEnvError = std.process.GetEnvVarOwnedError || InitFromTermError;
@@ -125,12 +79,12 @@ pub const TermInfo = union(TermInfoType) {
         const magic_number = @bitCast(u16, getInt(i16, memory[offset .. offset + 2]));
         offset += 2;
 
-        const typ = switch (magic_number) {
+        const typ: Type = switch (magic_number) {
             0o0432 => blk: {
-                break :blk TermInfoType.Regular;
+                break :blk .Regular;
             },
             0o1036 => blk: {
-                break :blk TermInfoType.Extended;
+                break :blk .Extended;
             },
             else => {
                 std.log.err("invalid magic number: actual `0o{o}` != expected `0o0432` or `0o1036`", .{magic_number});
@@ -181,39 +135,22 @@ pub const TermInfo = union(TermInfoType) {
         const names = try Names.init(allocator, names_section);
 
         // parse bools section
-        const bools = parse_bools_section(bools_section);
+        const bools = BooleanCapabilities.init(bools_section);
+
+        const nums = switch (typ) {
+            .Regular => NumericCapabilities.init(i16, nums_section),
+            .Extended => NumericCapabilities.init(i32, nums_section),
+        };
 
         const strings = try Strings.init(allocator, strings_section, str_table_section);
 
-        switch (typ) {
-            .Regular => {
-                const nums = parse_numeric_section(TermInfoType.getIntType(.Regular), nums_section);
-                return TermInfo{ .Regular = TermInfoType.getSizedType(.Regular){
-                    .names = names,
-                    .bool_capabilities = bools,
-                    .num_capabilities = nums,
-                    .strings = strings,
-                    .size = offset,
-                } };
-            },
-            .Extended => {
-                const nums = parse_numeric_section(TermInfoType.getIntType(.Extended), nums_section);
-                return TermInfo{ .Extended = TermInfoType.getSizedType(.Extended){
-                    .names = names,
-                    .bool_capabilities = bools,
-                    .num_capabilities = nums,
-                    .strings = strings,
-                    .size = offset,
-                } };
-            },
-        }
-    }
-
-    pub fn deinit(self: Self) void {
-        switch (self) {
-            .Regular => |ti| ti.deinit(),
-            .Extended => |ti| ti.deinit(),
-        }
+        return TermInfo{
+            .names = names,
+            .bool_capabilities = bools,
+            .num_capabilities = nums,
+            .strings = strings,
+            .size = offset,
+        };
     }
 };
 
@@ -277,6 +214,8 @@ pub const Names = struct {
 
 /// Boolean capabilities in the same order as `<term.h>`.
 pub const BooleanCapabilities = struct {
+    const Self = @This();
+
     auto_left_margin: bool,
     auto_right_margin: bool,
     no_esc_ctlc: bool,
@@ -314,122 +253,92 @@ pub const BooleanCapabilities = struct {
     semi_auto_rigth_margin: bool,
     cpi_changes_res: bool,
     lpi_changes_res: bool,
-};
 
-/// Numeric capabilities in the same order as `<term.h>`.
-pub fn NumericCapabilities(comptime N: type) type {
-    return struct {
-        columns: ?N,
-        init_tabs: ?N,
-        lines: ?N,
-        lines_of_memory: ?N,
-        magic_cookie_glitch: ?N,
-        padding_baud_rate: ?N,
-        virtual_terminal: ?N,
-        width_status_line: ?N,
-        num_labels: ?N,
-        label_height: ?N,
-        label_width: ?N,
-        max_attributes: ?N,
-        maximum_windows: ?N,
-        max_colors: ?N,
-        max_pairs: ?N,
-        no_color_video: ?N,
-        buffer_capacity: ?N,
-        dot_vert_spacing: ?N,
-        dot_horz_spacing: ?N,
-        max_micro_address: ?N,
-        max_micro_jump: ?N,
-        micro_col_size: ?N,
-        micro_line_size: ?N,
-        number_of_pins: ?N,
-        output_res_char: ?N,
-        output_res_line: ?N,
-        output_res_horz_inch: ?N,
-        output_res_vert_inch: ?N,
-        print_rate: ?N,
-        wide_char_size: ?N,
-        buttons: ?N,
-        bit_image_entwining: ?N,
-        bit_image_type: ?N,
-
-        pub fn intoExtended(self: @This()) NumericCapabilities(i32) {
-            if (N == i32) {
-                return self;
-            }
-
-            std.debug.assert(N == i16);
-
-            // the generic type doesn't really matter here, so we just use N
-            const fields = @typeInfo(NumericCapabilities(N)).Struct.fields;
-
-            var caps: NumericCapabilities(i32) = undefined;
-            inline for (fields) |field| {
-                const value_n = @field(self, field.name);
-                if (value_n) |value| {
-                    // i16 can cast to i32
-                    // @as preserves signedness for signed types
-                    @field(caps, field.name) = @as(?i32, value);
-                } else {
-                    @field(caps, field.name) = null;
-                }
-            }
-
-            return caps;
-        }
-    };
-}
-
-fn parse_bools_section(section: []const u8) BooleanCapabilities {
-    var capabilities: BooleanCapabilities = std.mem.zeroes(BooleanCapabilities);
-    const fields = @typeInfo(BooleanCapabilities).Struct.fields;
-    inline for (fields, 0..) |field, byte_index| {
-        const byte = section[byte_index];
-        const value = if (byte == 1) true else if (byte == 0) false else unreachable;
-        @field(capabilities, field.name) = value;
-    }
-
-    return capabilities;
-}
-
-fn parse_numeric_section(comptime N: type, section: []const u8) NumericCapabilities(N) {
-    const int_width = @sizeOf(N);
-    var capabilities: NumericCapabilities(N) = std.mem.zeroes(NumericCapabilities(N));
-    const fields = @typeInfo(NumericCapabilities(N)).Struct.fields;
-    var int_i: usize = 0;
-    inline for (fields) |field| {
-        if (int_i >= section.len) {
-            break;
-        }
-        const bytes = section[int_i .. int_i + int_width];
-        const value = @import("mem.zig").getInt(N, bytes);
-
-        if (value == -1) {
-            // value of -1 means capability isn't supported
-            @field(capabilities, field.name) = null;
-        } else {
+    pub fn init(section: []const u8) Self {
+        var capabilities: Self = std.mem.zeroes(Self);
+        const fields = @typeInfo(Self).Struct.fields;
+        inline for (fields, 0..) |field, byte_index| {
+            const byte = section[byte_index];
+            const value = if (byte == 1) true else if (byte == 0) false else unreachable;
             @field(capabilities, field.name) = value;
         }
 
-        int_i += int_width;
+        return capabilities;
     }
-    return capabilities;
-}
+};
+
+/// Numeric capabilities in the same order as `<term.h>`.
+pub const NumericCapabilities = struct {
+    const Self = @This();
+
+    columns: ?i32,
+    init_tabs: ?i32,
+    lines: ?i32,
+    lines_of_memory: ?i32,
+    magic_cookie_glitch: ?i32,
+    padding_baud_rate: ?i32,
+    virtual_terminal: ?i32,
+    width_status_line: ?i32,
+    num_labels: ?i32,
+    label_height: ?i32,
+    label_width: ?i32,
+    max_attributes: ?i32,
+    maximum_windows: ?i32,
+    max_colors: ?i32,
+    max_pairs: ?i32,
+    no_color_video: ?i32,
+    buffer_capacity: ?i32,
+    dot_vert_spacing: ?i32,
+    dot_horz_spacing: ?i32,
+    max_micro_address: ?i32,
+    max_micro_jump: ?i32,
+    micro_col_size: ?i32,
+    micro_line_size: ?i32,
+    number_of_pins: ?i32,
+    output_res_char: ?i32,
+    output_res_line: ?i32,
+    output_res_horz_inch: ?i32,
+    output_res_vert_inch: ?i32,
+    print_rate: ?i32,
+    wide_char_size: ?i32,
+    buttons: ?i32,
+    bit_image_entwining: ?i32,
+    bit_image_type: ?i32,
+
+    pub fn init(comptime N: type, section: []const u8) Self {
+        const int_width = @sizeOf(N);
+        var capabilities: NumericCapabilities = std.mem.zeroes(NumericCapabilities);
+        const fields = @typeInfo(NumericCapabilities).Struct.fields;
+        var int_i: usize = 0;
+        inline for (fields) |field| {
+            if (int_i >= section.len) {
+                break;
+            }
+            const bytes = section[int_i .. int_i + int_width];
+            const value = @import("mem.zig").getInt(N, bytes);
+
+            if (value == -1) {
+                // value of -1 means capability isn't supported
+                @field(capabilities, field.name) = null;
+            } else {
+                @field(capabilities, field.name) = @as(i32, value);
+            }
+
+            int_i += int_width;
+        }
+        return capabilities;
+    }
+};
 
 test "basic" {
     const term_info = try TermInfo.initFromFile(std.testing.allocator, "/usr/share/terminfo/a/adm3a");
-    const term_info_sized = switch (term_info) {
-        .Regular => |ti| ti,
-        .Extended => unreachable,
-    };
-    defer term_info_sized.deinit();
-    const name = term_info_sized.names.getPrimary();
+    defer term_info.deinit();
+    const name = term_info.names.getPrimary();
     try std.testing.expectEqualSlices(u8, name, "adm3a");
 }
 
 test "initFromEnv" {
-    const term_info_unknown = try TermInfo.initFromEnv(std.testing.allocator);
-    const term_info = term_info_unknown.intoExtended();
+    const term_info = try TermInfo.initFromEnv(std.testing.allocator);
     defer term_info.deinit();
     const name = term_info.names.getPrimary();
     try std.testing.expectEqualSlices(u8, name, "alacritty");
