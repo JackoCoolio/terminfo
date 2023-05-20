@@ -21,17 +21,11 @@ pub fn deinit(self: @This()) void {
     self.table.deinit();
 }
 
-pub fn getStringByField(self: *const Self, comptime field: Capabilities.Field()) ?[]const u8 {
-    const field_name = @tagName(field);
-    const slice = @field(self.capabilities, field_name) orelse return null;
-    return self.table.getStringFromSlice(slice);
-}
-
-test "getStringBySlice" {
+test "string capabilities" {
     const TermInfo = @import("main.zig").TermInfo;
     const term_info = (try TermInfo.initFromFile(std.testing.allocator, "/usr/share/terminfo/a/adm3a")).Regular;
     defer term_info.deinit();
 
-    try std.testing.expectEqualSlices(u8, term_info.strings.getStringByField(.bell).?, &[_]u8{0x07});
-    try std.testing.expectEqualSlices(u8, term_info.strings.getStringByField(.cursor_address).?, &[_]u8{0x1b} ++ "=%p1%' '%+%c%p2%' '%+%c");
+    try std.testing.expectEqualSlices(u8, term_info.strings.capabilities.bell.?, &[_]u8{0x07});
+    try std.testing.expectEqualSlices(u8, term_info.strings.capabilities.cursor_address.?, &[_]u8{0x1b} ++ "=%p1%' '%+%c%p2%' '%+%c");
 }
