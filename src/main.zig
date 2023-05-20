@@ -1,6 +1,7 @@
 const std = @import("std");
 const Strings = @import("Strings.zig");
 
+/// A TermInfo struct
 pub fn SizedTermInfo(comptime N: type) type {
     return struct {
         const Self = @This();
@@ -9,10 +10,23 @@ pub fn SizedTermInfo(comptime N: type) type {
         bool_capabilities: BooleanCapabilities,
         num_capabilities: NumericCapabilities(N),
         strings: Strings,
+        size: usize,
 
+        /// Deinitializes and frees memory.
         pub fn deinit(self: Self) void {
             self.names.deinit();
             self.strings.deinit();
+        }
+
+        /// Returns a 4-byte integer version of this terminfo.
+        pub fn intoExtended(self: Self) SizedTermInfo(i32) {
+            return .{
+                .names = self.names,
+                .bool_capabilities = self.bool_capabilities,
+                .num_capabilities = self.num_capabilities.intoExtended(),
+                .strings = self.strings,
+                .size = self.size,
+            };
         }
     };
 }
@@ -55,6 +69,39 @@ pub const TermInfo = union(TermInfoType) {
         };
     }
 
+    pub fn intoExtended(self: Self) SizedTermInfo(i32) {
+        return switch (self) {
+            .Regular => |ti| ti.intoExtended(),
+            .Extended => |ti| ti,
+        };
+    }
+
+    pub const InitFromEnvError = std.process.GetEnvVarOwnedError || InitFromTermError;
+    pub fn initFromEnv(allocator: std.mem.Allocator) InitFromEnvError!Self {
+        const term = try std.process.getEnvVarOwned(allocator, "TERM");
+        defer allocator.free(term);
+
+        return try initFromTerm(allocator, term);
+    }
+
+    pub const InitFromTermError = error{
+        MissingTermInfoFile,
+        InvalidTermName,
+    } || InitFromFileError;
+    pub fn initFromTerm(allocator: std.mem.Allocator, term: []const u8) InitFromTermError!Self {
+        if (term.len == 0) {
+            return error.InvalidTermName;
+        }
+
+        const first_char = term[0];
+        var path_buf: [64]u8 = undefined;
+        const path = std.fmt.bufPrint(&path_buf, "/usr/share/terminfo/{c}/{s}", .{ first_char, term }) catch {
+            return error.InvalidTermName;
+        };
+
+        return try initFromFile(allocator, path);
+    }
+
     pub const InitFromFileError = std.fs.File.OpenError || std.fs.File.ReadError || InitFromMemoryError;
     pub fn initFromFile(allocator: std.mem.Allocator, filepath: []const u8) InitFromFileError!Self {
         const file = try std.fs.openFileAbsolute(filepath, std.fs.File.OpenFlags{
@@ -71,17 +118,19 @@ pub const TermInfo = union(TermInfoType) {
     pub fn initFromMemory(allocator: std.mem.Allocator, memory: []const u8) InitFromMemoryError!Self {
         const getInt = @import("mem.zig").getInt;
 
-        std.log.info("initializing from memory: '{s}'", .{memory});
-
         var offset: usize = 0;
         const magic_number = @bitCast(u16, getInt(i16, memory[offset .. offset + 2]));
         offset += 2;
 
         const typ = switch (magic_number) {
-            0o0432 => TermInfoType.Regular,
-            0o1036 => TermInfoType.Extended,
+            0o0432 => blk: {
+                break :blk TermInfoType.Regular;
+            },
+            0o1036 => blk: {
+                break :blk TermInfoType.Extended;
+            },
             else => {
-                std.log.err("invalid magic numbere: actual `0o{o}` != expected `0o0432` or `0o1036`", .{magic_number});
+                std.log.err("invalid magic number: actual `0o{o}` != expected `0o0432` or `0o1036`", .{magic_number});
                 return error.NotATermInfoError;
             },
         };
@@ -96,11 +145,13 @@ pub const TermInfo = union(TermInfoType) {
         const nums_size = @bitCast(u16, getInt(i16, memory[offset .. offset + 2])) * typ.getIntWidth();
         offset += 2;
 
-        const strings_size = @bitCast(u16, getInt(i16, memory[offset .. offset + 2])) * typ.getIntWidth();
+        const strings_size = @bitCast(u16, getInt(i16, memory[offset .. offset + 2])) * @sizeOf(i16);
         offset += 2;
 
         const str_table_size = @bitCast(u16, getInt(i16, memory[offset .. offset + 2]));
         offset += 2;
+
+        std.debug.assert(offset == 12);
 
         // get sections
         const names_section = memory[offset .. offset + term_names_size];
@@ -139,6 +190,7 @@ pub const TermInfo = union(TermInfoType) {
                     .bool_capabilities = bools,
                     .num_capabilities = nums,
                     .strings = strings,
+                    .size = offset,
                 } };
             },
             .Extended => {
@@ -148,6 +200,7 @@ pub const TermInfo = union(TermInfoType) {
                     .bool_capabilities = bools,
                     .num_capabilities = nums,
                     .strings = strings,
+                    .size = offset,
                 } };
             },
         }
@@ -296,6 +349,31 @@ pub fn NumericCapabilities(comptime N: type) type {
         buttons: ?N,
         bit_image_entwining: ?N,
         bit_image_type: ?N,
+
+        pub fn intoExtended(self: @This()) NumericCapabilities(i32) {
+            if (N == i32) {
+                return self;
+            }
+
+            std.debug.assert(N == i16);
+
+            // the generic type doesn't really matter here, so we just use N
+            const fields = @typeInfo(NumericCapabilities(N)).Struct.fields;
+
+            var caps: NumericCapabilities(i32) = undefined;
+            inline for (fields) |field| {
+                const value_n = @field(self, field.name);
+                if (value_n) |value| {
+                    // i16 can cast to i32
+                    // @as preserves signedness for signed types
+                    @field(caps, field.name) = @as(?i32, value);
+                } else {
+                    @field(caps, field.name) = null;
+                }
+            }
+
+            return caps;
+        }
     };
 }
 
@@ -344,4 +422,12 @@ test "basic" {
     defer term_info_sized.deinit();
     const name = term_info_sized.names.getPrimary();
     try std.testing.expectEqualSlices(u8, name, "adm3a");
+}
+
+test "initFromEnv" {
+    const term_info_unknown = try TermInfo.initFromEnv(std.testing.allocator);
+    const term_info = term_info_unknown.intoExtended();
+    defer term_info.deinit();
+    const name = term_info.names.getPrimary();
+    try std.testing.expectEqualSlices(u8, name, "alacritty");
 }
