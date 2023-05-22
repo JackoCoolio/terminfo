@@ -128,6 +128,8 @@ pub const TermInfo = struct {
         const strings_section = memory[offset .. offset + strings_size];
         offset += strings_size;
 
+        std.log.warn("strings section: {s}", .{std.fmt.fmtSliceEscapeLower(strings_section)});
+
         const str_table_section = memory[offset .. offset + str_table_size];
         offset += str_table_size;
 
