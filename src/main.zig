@@ -1,5 +1,5 @@
 const std = @import("std");
-const Strings = @import("Strings.zig");
+pub const Strings = @import("Strings.zig");
 
 /// A TermInfo struct
 pub const TermInfo = struct {
@@ -87,7 +87,6 @@ pub const TermInfo = struct {
                 break :blk .Extended;
             },
             else => {
-                std.log.err("invalid magic number: actual `0o{o}` != expected `0o0432` or `0o1036`", .{magic_number});
                 return error.NotATermInfoError;
             },
         };
@@ -127,8 +126,6 @@ pub const TermInfo = struct {
 
         const strings_section = memory[offset .. offset + strings_size];
         offset += strings_size;
-
-        std.log.warn("strings section: {s}", .{std.fmt.fmtSliceEscapeLower(strings_section)});
 
         const str_table_section = memory[offset .. offset + str_table_size];
         offset += str_table_size;

@@ -35,28 +35,57 @@ pub fn init(allocator: std.mem.Allocator, strings_section: []const u8, string_ta
         // get the slice
         const slice = strings.table.getSliceFromByteOffset(@as(usize, @bitCast(u16, str_i)));
         if (slice == null) {
-            std.log.warn("invalid terminfo: byte offset = {d}", .{str_i});
+            // we could consider logging an error somewhere, but logging to stdout
+            // is not an option, since this library is intended to be used in TUI
+            // applications
+            continue;
         }
 
-        std.log.warn("setting cap '{s}' to '{s}'", .{ @tagName(@intToEnum(Capability, i)), std.fmt.fmtSliceEscapeLower(slice orelse "null") });
+        // get the capability index
+        const capability = byte_i / int_width;
 
-        strings.capabilities[i] = slice;
+        strings.capabilities[capability] = slice;
     }
-
-    std.debug.assert(strings.capabilities[@enumToInt(Capability.bell)] != null);
 
     return strings;
 }
 
+/// Releases all allocated memory.
 pub fn deinit(self: @This()) void {
     self.table.deinit();
 }
 
+/// Gets the value of the given capability.
 pub fn getValue(self: *const @This(), capability: Capability) ?[]const u8 {
-    std.log.warn("strings: 0x{x}", .{@ptrToInt(self)});
-    std.log.warn("the address of {s} is 0x{x}", .{ @tagName(capability), @ptrToInt(&self.capabilities[@enumToInt(capability)]) });
     return self.capabilities[@enumToInt(capability)];
 }
+
+/// Returns an iterator over defined capabilities.
+pub fn iter(self: *const Self) Iter {
+    return Iter{
+        .strings = self,
+        .index = 0,
+    };
+}
+
+const Strings = Self;
+pub const Iter = struct {
+    strings: *const Strings,
+    index: usize,
+
+    pub fn next(self: *@This()) ?[]const u8 {
+        if (self.index >= num_capabilities) {
+            return null;
+        }
+
+        var item = null;
+        while (item == null and self.index < num_capabilities) : (self.index += 1) {
+            item = self.strings.capabilities[self.index];
+        }
+
+        return item;
+    }
+};
 
 pub const Table = struct {
     // The table stores the string table section data and an array of slices to the
@@ -515,6 +544,27 @@ pub const Capability = enum(u16) {
     enter_vertical_hl_mode,
     set_a_attributes,
     set_pglen_inch,
+    // internal capabilities
+    termcap_init2,
+    termcap_reset,
+    linefeed_if_not_lf,
+    backspace_if_not_bs,
+    other_non_function_keys,
+    arrow_key_map,
+    acs_ulcorner,
+    acs_llcorner,
+    acs_urcorner,
+    acs_lrcorner,
+    acs_ltee,
+    acs_rtee,
+    acs_btee,
+    acs_ttee,
+    acs_hline,
+    acs_vline,
+    acs_plus,
+    memory_lock,
+    memory_unlock,
+    box_chars_1,
 };
 
 const num_capabilities = @typeInfo(Capability).Enum.fields.len;
