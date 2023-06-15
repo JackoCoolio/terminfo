@@ -73,17 +73,29 @@ pub const Iter = struct {
     strings: *const Strings,
     index: usize,
 
-    pub fn next(self: *@This()) ?[]const u8 {
-        if (self.index >= num_capabilities) {
+    /// The item that is returned by next()
+    pub const Item = struct {
+        capability: Capability,
+        value: []const u8,
+    };
+
+    pub fn next(self: *@This()) ?Item {
+        // find next non-null capability
+        const value = blk: while (self.index < num_capabilities) : (self.index += 1) {
+            if (self.strings.capabilities[self.index]) |value| {
+                break :blk value;
+            }
+        } else {
             return null;
-        }
+        };
 
-        var item = null;
-        while (item == null and self.index < num_capabilities) : (self.index += 1) {
-            item = self.strings.capabilities[self.index];
-        }
+        // make sure to skip past this capability
+        defer self.index += 1;
 
-        return item;
+        return Item{
+            .capability = @intToEnum(Capability, self.index),
+            .value = value,
+        };
     }
 };
 
