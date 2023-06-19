@@ -57,7 +57,12 @@ pub fn deinit(self: @This()) void {
 
 /// Gets the value of the given capability.
 pub fn getValue(self: *const @This(), capability: Capability) ?[]const u8 {
-    return self.capabilities[@enumToInt(capability)];
+    const val = self.capabilities[@enumToInt(capability)] orelse return null;
+    if (val.len == 0) {
+        return null;
+    } else {
+        return val;
+    }
 }
 
 /// Returns an iterator over defined capabilities.
@@ -83,7 +88,9 @@ pub const Iter = struct {
         // find next non-null capability
         const value = blk: while (self.index < num_capabilities) : (self.index += 1) {
             if (self.strings.capabilities[self.index]) |value| {
-                break :blk value;
+                if (value.len > 0) {
+                    break :blk value;
+                }
             }
         } else {
             return null;
