@@ -1,12 +1,18 @@
 const std = @import("std");
 const mem = @import("mem.zig");
-const Self = @This();
+const Strings = @This();
 
-capabilities: [num_capabilities](?[]const u8),
+test {
+    _ = init;
+    _ = iter;
+    _ = Iter;
+}
+
+capabilities: [num_capabilities](?Sequence),
 table: Table,
 
-pub fn init(allocator: std.mem.Allocator, strings_section: []const u8, string_table_section: []const u8) std.mem.Allocator.Error!Self {
-    var strings: Self = undefined;
+pub fn init(allocator: std.mem.Allocator, strings_section: []const u8, string_table_section: []const u8) std.mem.Allocator.Error!Strings {
+    var strings: Strings = undefined;
 
     strings.table = try Table.init(allocator, string_table_section);
 
@@ -33,18 +39,22 @@ pub fn init(allocator: std.mem.Allocator, strings_section: []const u8, string_ta
         }
 
         // get the slice
-        const slice = strings.table.getSliceFromByteOffset(@as(usize, @bitCast(u16, str_i)));
-        if (slice == null) {
-            // we could consider logging an error somewhere, but logging to stdout
-            // is not an option, since this library is intended to be used in TUI
-            // applications
+        const slice = strings.table.getSliceFromByteOffset(@as(usize, @bitCast(u16, str_i))) orelse continue;
+
+        // we could consider logging an error somewhere, but logging to stdout
+        // is not an option, since this library is intended to be used in TUI
+        // applications
+        if (slice.len == 0) {
             continue;
         }
+
+        std.log.info("parsing capability '{s}' with sequence '{s}'", .{ @tagName(@intToEnum(Capability, byte_i / int_width)), std.fmt.fmtSliceEscapeLower(slice) });
+        const sequence = try Sequence.parse(allocator, slice);
 
         // get the capability index
         const capability = byte_i / int_width;
 
-        strings.capabilities[capability] = slice;
+        strings.capabilities[capability] = sequence;
     }
 
     return strings;
@@ -55,25 +65,35 @@ pub fn deinit(self: @This()) void {
     self.table.deinit();
 }
 
-/// Gets the value of the given capability.
-pub fn getValue(self: *const @This(), capability: Capability) ?[]const u8 {
-    const val = self.capabilities[@enumToInt(capability)] orelse return null;
-    if (val.len == 0) {
-        return null;
-    } else {
-        return val;
+pub fn get_value(self: *const Strings, capability: Capability) ?[]const u8 {
+    const seq = self.capabilities[@enumToInt(capability)] orelse return null;
+    return switch (seq) {
+        .regular => |bytes| bytes,
+        .parameterized => null,
+    };
+}
+
+pub fn get_value_with_args(self: *const Strings, alloc: std.mem.Allocator, capability: Capability, args: []const Parameter) std.mem.Allocator.Error!?[]const u8 {
+    const seq = self.capabilities[@enumToInt(capability)] orelse return null;
+    var buf = std.ArrayList(u8).init(alloc);
+    switch (seq) {
+        .regular => |bytes| return try alloc.dupe(u8, bytes),
+        .parameterized => |parameterized| {
+            var writer = buf.writer();
+            parameterized.write(alloc, writer, args) catch unreachable;
+            return try buf.toOwnedSlice();
+        },
     }
 }
 
 /// Returns an iterator over defined capabilities.
-pub fn iter(self: *const Self) Iter {
+pub fn iter(self: *const Strings) Iter {
     return Iter{
         .strings = self,
         .index = 0,
     };
 }
 
-const Strings = Self;
 pub const Iter = struct {
     strings: *const Strings,
     index: usize,
@@ -88,8 +108,9 @@ pub const Iter = struct {
         // find next non-null capability
         const value = blk: while (self.index < num_capabilities) : (self.index += 1) {
             if (self.strings.capabilities[self.index]) |value| {
-                if (value.len > 0) {
-                    break :blk value;
+                switch (value) {
+                    .regular => |slice| break :blk slice,
+                    .parameterized => continue,
                 }
             }
         } else {
@@ -595,4 +616,537 @@ test "string capabilities" {
 
     try std.testing.expectEqualSlices(u8, term_info.strings.getValue(.bell) orelse unreachable, &[_]u8{0x07});
     try std.testing.expectEqualSlices(u8, term_info.strings.getValue(.cursor_address) orelse unreachable, &[_]u8{0x1b} ++ "=%p1%' '%+%c%p2%' '%+%c");
+}
+
+pub const ParameterKind = enum {
+    integer,
+    string,
+};
+
+pub const Parameter = union(ParameterKind) {
+    integer: i32,
+    string: []const u8,
+};
+
+fn eat_integer(bytes: []const u8) struct { value: u32, rem: []const u8 } {
+    var value: u32 = 0;
+    var rem = bytes;
+    while (rem.len > 0 and std.ascii.isDigit(rem[0])) {
+        const digit_val = rem[0] - '0';
+        value *= 10;
+        value += digit_val;
+        rem = rem[1..];
+    }
+
+    return .{
+        .value = value,
+        .rem = rem,
+    };
+}
+
+pub const Formatted = struct {
+    flags: Flags,
+    width: u32,
+    precision: u32,
+    conversion: Conversion,
+
+    pub const Conversion = enum {
+        decimal,
+        octal,
+        lower_hex,
+        upper_hex,
+        string,
+    };
+
+    pub fn parse(input: []const u8) ?struct { formatted: Formatted, rem: []const u8 } {
+        var rem = input;
+
+        // skip leading colon
+        if (rem[0] == ':') {
+            rem = rem[1..];
+        }
+
+        // flags
+        const parsed_flags = Flags.parse(rem);
+        const flags = parsed_flags.flags;
+        rem = parsed_flags.rem;
+
+        // width
+        const eaten_width = eat_integer(rem);
+        // defaults to zero
+        const width = eaten_width.value;
+        rem = eaten_width.rem;
+
+        // precision
+        const precision = if (rem.len > 0 and rem[0] == '.') blk: {
+            rem = rem[1..];
+            const eaten_prec = eat_integer(rem);
+            // defaults to zero
+            const precision = eaten_prec.value;
+            rem = eaten_prec.rem;
+            break :blk precision;
+        } else 0;
+
+        if (rem.len == 0) {
+            return null;
+        }
+
+        const conversion: Conversion = switch (rem[0]) {
+            'd' => .decimal,
+            'o' => .octal,
+            'x' => .lower_hex,
+            'X' => .upper_hex,
+            's' => .string,
+            else => return null,
+        };
+        rem = rem[1..];
+
+        return .{
+            .formatted = .{
+                .flags = flags,
+                .width = width,
+                .precision = precision,
+                .conversion = conversion,
+            },
+            .rem = rem,
+        };
+    }
+
+    pub const WriteError = error{ InvalidFormatValue, WriterError } || std.mem.Allocator.Error;
+    pub fn write(self: *const Formatted, alloc: std.mem.Allocator, writer: anytype, param: Parameter) WriteError!void {
+        switch (param) {
+            .integer => |value| {
+                var buf = try std.ArrayList(u8).initCapacity(alloc, self.width);
+                switch (self.conversion) {
+                    .decimal => try std.fmt.format(buf.writer(), "{d}", .{value}),
+                    .lower_hex => try std.fmt.format(buf.writer(), "{x}", .{value}),
+                    .upper_hex => try std.fmt.format(buf.writer(), "{X}", .{value}),
+                    .octal => try std.fmt.format(buf.writer(), "{o}", .{value}),
+                    .string => return error.InvalidFormatValue,
+                }
+
+                if (self.flags.alternate) {
+                    switch (self.conversion) {
+                        .octal => if (buf.items[0] != '0') {
+                            try buf.insert(0, '0');
+                        },
+                        .lower_hex => try buf.insertSlice(0, "0x"),
+                        .upper_hex => try buf.insertSlice(0, "0x"),
+                        else => unreachable,
+                    }
+                }
+
+                if (value < 0) {
+                    try buf.insert(0, '-');
+                } else if (self.flags.print_sign) {
+                    try buf.insert(0, '+');
+                } else if (self.flags.space_before_signed and value >= 0) {
+                    try buf.insert(0, ' ');
+                }
+
+                if (buf.items.len < self.width) {
+                    if (self.flags.left_justified) {
+                        for (buf.items.len..self.width) |_| {
+                            try buf.append(' ');
+                        }
+                    } else {
+                        for (buf.items.len..self.width) |_| {
+                            try buf.insert(0, ' ');
+                        }
+                    }
+                }
+                _ = writer.write(buf.items) catch return error.WriterError;
+            },
+            .string => |value| {
+                if (self.conversion != .string) {
+                    return error.InvalidFormatValue;
+                }
+
+                _ = writer.write(value) catch return error.WriterError;
+            },
+        }
+    }
+
+    const Flags = packed struct {
+        alternate: bool,
+        // printf(3) specifies a zero-padding flag, but terminfo(5) does not
+        left_justified: bool,
+        space_before_signed: bool,
+        // overrides `space_before_signed` if true
+        print_sign: bool,
+
+        pub fn parse(input: []const u8) struct { flags: Flags, rem: []const u8 } {
+            var rem = input;
+            var flags = Flags{
+                .alternate = false,
+                .left_justified = false,
+                .space_before_signed = false,
+                .print_sign = false,
+            };
+
+            while (rem.len > 0) {
+                const char = rem[0];
+
+                switch (char) {
+                    '#' => flags.alternate = true,
+                    '-' => flags.left_justified = true,
+                    ' ' => flags.space_before_signed = true,
+                    '+' => flags.print_sign = true,
+                    else => break,
+                }
+
+                rem = rem[1..];
+            }
+
+            return .{
+                .flags = flags,
+                .rem = rem,
+            };
+        }
+    };
+};
+
+const Action = union(enum) {
+    print_char: u8,
+    print_formatted: Formatted,
+    push_nth_arg: u8,
+    pop_string,
+    print_int: u32,
+    increment_first_two_params,
+    push_strlen_pop,
+    bin_op: BinOp,
+    unary_op: UnaryOp,
+    begin_conditional,
+    test_expr,
+    else_branch,
+    end_conditional,
+};
+
+const BinOp = enum {
+    add,
+    sub,
+    mul,
+    div,
+    mod,
+    bit_and,
+    bit_or,
+    bit_xor,
+    eq,
+    gt,
+    lt,
+    log_and,
+    log_or,
+};
+
+const UnaryOp = enum {
+    log_not,
+    bit_not,
+};
+
+pub const Sequence = union(enum) {
+    regular: []const u8,
+    parameterized: ParameterizedSequence,
+
+    pub fn parse(alloc: std.mem.Allocator, seq: []const u8) std.mem.Allocator.Error!Sequence {
+        const param_seq = try ParameterizedSequence.parse(alloc, seq);
+        if (param_seq.n_params == 0) {
+            return .{
+                .regular = seq,
+            };
+        } else {
+            return .{
+                .parameterized = param_seq,
+            };
+        }
+    }
+};
+
+pub const ParameterizedSequence = struct {
+    n_params: u8,
+    actions: []const Action,
+
+    pub fn parse(alloc: std.mem.Allocator, seq: []const u8) std.mem.Allocator.Error!ParameterizedSequence {
+        var n_params: u8 = 0;
+        var actions = std.ArrayList(Action).init(alloc);
+        var rem = seq;
+        while (rem.len > 0) {
+            if (rem[0] == '%') {
+                rem = rem[1..];
+
+                if (rem[0] == '\'') {
+                    const ch = rem[1];
+                    try actions.append(.{
+                        .print_char = ch,
+                    });
+                    rem = rem[3..];
+                } else if (rem[0] == '%') {
+                    try actions.append(.{
+                        .print_char = '%',
+                    });
+                    rem = rem[1..];
+                } else if (rem[0] == 'p') {
+                    // argument
+                    const index_char = rem[1];
+                    std.debug.assert(std.ascii.isDigit(index_char));
+                    const index = index_char - '0';
+                    try actions.append(.{
+                        .push_nth_arg = index,
+                    });
+                    n_params = @max(n_params, index + 1);
+                    rem = rem[2..];
+                } else if (rem[0] == 'c' or rem[1] == 's') {
+                    try actions.append(.pop_string);
+                    rem = rem[1..];
+                } else if (rem[0] == '{') {
+                    const eaten = eat_integer(rem[1..]);
+
+                    try actions.append(.{
+                        .print_int = eaten.value,
+                    });
+                    rem = eaten.rem[1..];
+                } else if (rem[0] == 'l') {
+                    try actions.append(.push_strlen_pop);
+                    rem = rem[1..];
+                } else if (rem[0] == 'i') {
+                    try actions.append(.increment_first_two_params);
+                    rem = rem[1..];
+                } else if (rem[0] == '+') {
+                    try actions.append(.{ .bin_op = .add });
+                    rem = rem[1..];
+                } else if (rem[0] == '-') {
+                    try actions.append(.{ .bin_op = .sub });
+                    rem = rem[1..];
+                } else if (rem[0] == '*') {
+                    try actions.append(.{ .bin_op = .mul });
+                    rem = rem[1..];
+                } else if (rem[0] == '/') {
+                    try actions.append(.{ .bin_op = .div });
+                    rem = rem[1..];
+                } else if (rem[0] == 'm') {
+                    try actions.append(.{ .bin_op = .mod });
+                    rem = rem[1..];
+                } else if (rem[0] == '&') {
+                    try actions.append(.{ .bin_op = .bit_and });
+                    rem = rem[1..];
+                } else if (rem[0] == '|') {
+                    try actions.append(.{ .bin_op = .bit_or });
+                    rem = rem[1..];
+                } else if (rem[0] == '^') {
+                    try actions.append(.{ .bin_op = .bit_xor });
+                    rem = rem[1..];
+                } else if (rem[0] == '=') {
+                    try actions.append(.{ .bin_op = .eq });
+                    rem = rem[1..];
+                } else if (rem[0] == '>') {
+                    try actions.append(.{ .bin_op = .gt });
+                    rem = rem[1..];
+                } else if (rem[0] == '<') {
+                    try actions.append(.{ .bin_op = .lt });
+                    rem = rem[1..];
+                } else if (rem[0] == 'A') {
+                    try actions.append(.{ .bin_op = .log_and });
+                    rem = rem[1..];
+                } else if (rem[0] == 'O') {
+                    try actions.append(.{ .bin_op = .log_or });
+                    rem = rem[1..];
+                } else if (rem[0] == '!') {
+                    try actions.append(.{ .unary_op = .log_not });
+                    rem = rem[1..];
+                } else if (rem[0] == '~') {
+                    try actions.append(.{ .unary_op = .bit_not });
+                    rem = rem[1..];
+                } else if (rem[0] == '?') {
+                    try actions.append(.begin_conditional);
+                    rem = rem[1..];
+                } else if (rem[0] == 't') {
+                    try actions.append(.test_expr);
+                    rem = rem[1..];
+                } else if (rem[0] == 'e') {
+                    try actions.append(.else_branch);
+                    rem = rem[1..];
+                } else if (rem[0] == ';') {
+                    try actions.append(.end_conditional);
+                    rem = rem[1..];
+                } else {
+                    const formatted = Formatted.parse(rem) orelse {
+                        // this isn't specified in terminfo(5) or
+                        // curs_terminfo(3X), but this is the behavior of
+                        // `tparm`.
+                        // Cap "user8" of "xterm-256color" contains "%[" which,
+                        // as far as I can tell, is undefined behavior.
+                        rem = rem[1..];
+                        continue;
+                    };
+                    try actions.append(.{
+                        .print_formatted = formatted.formatted,
+                    });
+                    rem = formatted.rem;
+                }
+            } else {
+                try actions.append(.{
+                    .print_char = rem[0],
+                });
+                rem = rem[1..];
+            }
+        }
+
+        std.log.info("actions:", .{});
+        for (actions.items) |action| {
+            std.log.info("\t{}", .{action});
+        }
+
+        return .{
+            .n_params = n_params,
+            .actions = try actions.toOwnedSlice(),
+        };
+    }
+
+    pub const WriteError = error{WriterError} || std.mem.Allocator.Error;
+    pub fn write(self: *const ParameterizedSequence, alloc: std.mem.Allocator, writer: anytype, args: []const Parameter) WriteError!void {
+        var stack = Stack(Parameter){ .allocator = alloc };
+        var incremented = false;
+        var skip_after_then = false;
+        var skip_until_cond_end = false;
+        var skip_until_else = false;
+        for (self.actions) |action| {
+            if (skip_until_else and action != .else_branch) {
+                continue;
+            }
+
+            if (skip_until_cond_end and action != .end_conditional) {
+                continue;
+            }
+
+            switch (action) {
+                .print_char => |ch| {
+                    _ = try writer.write(&[_]u8{ch});
+                },
+                .print_formatted => |formatted| {
+                    const param = stack.pop().?;
+                    formatted.write(alloc, writer, param) catch return error.WriterError;
+                },
+                .push_nth_arg => |n| {
+                    if (incremented and n < 3) {
+                        const arg = switch (args[n - 1]) {
+                            .string => unreachable,
+                            .integer => |val| Parameter{
+                                .integer = val + 1,
+                            },
+                        };
+                        try stack.push(arg);
+                    } else {
+                        try stack.push(args[n - 1]);
+                    }
+                },
+                .pop_string => {
+                    const param = stack.pop().?;
+                    const val: []const u8 = switch (param) {
+                        .string => |val| val,
+                        .integer => unreachable,
+                    };
+                    _ = writer.write(val) catch return error.WriterError;
+                },
+                .print_int => |val| {
+                    var buf: [16]u8 = undefined;
+                    const slice = std.fmt.bufPrint(&buf, "{d}", .{val}) catch unreachable;
+                    _ = writer.write(slice) catch return error.WriterError;
+                },
+                .increment_first_two_params => {
+                    incremented = true;
+                },
+                .push_strlen_pop => {
+                    const val = stack.pop().?;
+                    const str = val.string;
+                    try stack.push(.{ .integer = @intCast(i32, str.len) });
+                },
+                .bin_op => |op| {
+                    const lhs = stack.pop().?;
+                    const rhs = stack.pop().?;
+                    const res = switch (op) {
+                        .add => .{ .integer = lhs.integer + rhs.integer },
+                        .sub => .{ .integer = lhs.integer - rhs.integer },
+                        .mul => .{ .integer = lhs.integer * rhs.integer },
+                        .div => .{ .integer = @divFloor(lhs.integer, rhs.integer) },
+                        .mod => .{ .integer = @mod(lhs.integer, rhs.integer) },
+                        .bit_and => .{ .integer = lhs.integer & rhs.integer },
+                        .bit_or => .{ .integer = lhs.integer | rhs.integer },
+                        .bit_xor => .{ .integer = lhs.integer ^ rhs.integer },
+                        .log_and => .{ .integer = if ((lhs.integer != 0) and (rhs.integer != 0)) @as(i32, 1) else 0 },
+                        .log_or => .{ .integer = if ((rhs.integer != 0) or (rhs.integer != 0)) @as(i32, 1) else 0 },
+                        .eq => .{ .integer = switch (lhs) {
+                            .string => if (std.mem.eql(u8, lhs.string, rhs.string)) @as(i32, 1) else 0,
+                            .integer => if (lhs.integer == rhs.integer) @as(i32, 1) else 0,
+                        } },
+                        .gt => .{ .integer = if (lhs.integer > rhs.integer) @as(i32, 1) else 0 },
+                        .lt => .{ .integer = if (lhs.integer < rhs.integer) @as(i32, 1) else 0 },
+                    };
+                    try stack.push(res);
+                },
+                .unary_op => |op| {
+                    const val = stack.pop().?;
+                    const res = switch (op) {
+                        .bit_not => .{ .integer = ~val.integer },
+                        .log_not => .{ .integer = if (val.integer != 0) @as(i32, 1) else 0 },
+                    };
+                    try stack.push(res);
+                },
+                .begin_conditional => {
+                    // no-op
+                },
+                .test_expr => {
+                    const val = stack.pop().?;
+                    const int = val.integer;
+                    if (int != 0) {
+                        // then
+                        skip_after_then = true;
+                    } else {
+                        // else
+                        skip_until_else = true;
+                    }
+                },
+                .else_branch => {
+                    if (skip_after_then) {
+                        skip_until_cond_end = true;
+                    }
+
+                    if (skip_until_else) {
+                        skip_until_else = false;
+                    }
+                },
+                .end_conditional => {
+                    skip_after_then = false;
+                    skip_until_cond_end = false;
+                    skip_until_else = false;
+                },
+            }
+        }
+    }
+};
+
+pub fn Stack(comptime T: type) type {
+    return struct {
+        const Self = @This();
+        const List = std.SinglyLinkedList(T);
+
+        allocator: std.mem.Allocator,
+        list: List = List{},
+
+        pub fn push(self: *Self, value: T) std.mem.Allocator.Error!void {
+            const node_ptr = try self.allocator.create(List.Node);
+            node_ptr.data = value;
+            self.list.prepend(node_ptr);
+        }
+
+        pub fn pop(self: *Self) ?T {
+            const node_ptr = self.list.popFirst() orelse return null;
+            const data = node_ptr.data;
+            self.allocator.destroy(node_ptr);
+            return data;
+        }
+
+        pub fn peek(self: *const Self) ?*T {
+            const node_ptr = self.list.first orelse return null;
+            return &node_ptr.data;
+        }
+    };
 }
