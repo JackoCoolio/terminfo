@@ -33,11 +33,11 @@ pub const TermInfo = struct {
     size: usize,
 
     pub fn get_bool(self: *const Self, cap: bools.Capability) bool {
-        return self.bools[@enumToInt(cap)];
+        return self.bools[@intFromEnum(cap)];
     }
 
     pub fn get_num(self: *const Self, cap: nums.Capability) ?i32 {
-        return self.nums[@enumToInt(cap)];
+        return self.nums[@intFromEnum(cap)];
     }
 
     pub fn get_names(self: *const Self) *const Names {
@@ -90,10 +90,10 @@ pub const TermInfo = struct {
         NotATermInfoError,
     } || std.mem.Allocator.Error;
     pub fn initFromMemory(allocator: std.mem.Allocator, memory: []const u8) InitFromMemoryError!Self {
-        const getInt = @import("mem.zig").getInt;
+        const read_int = std.mem.readIntSliceLittle;
 
         var offset: usize = 0;
-        const magic_number = @bitCast(u16, getInt(i16, memory[offset .. offset + 2]));
+        const magic_number = read_int(u16, memory[offset .. offset + 2]);
         offset += 2;
 
         const typ: Type = switch (magic_number) {
@@ -109,19 +109,19 @@ pub const TermInfo = struct {
         };
 
         // get section sizes
-        const term_names_size = @bitCast(u16, getInt(i16, memory[offset .. offset + 2]));
+        const term_names_size = read_int(u16, memory[offset .. offset + 2]);
         offset += 2;
 
-        const bools_size = @bitCast(u16, getInt(i16, memory[offset .. offset + 2]));
+        const bools_size: u16 = read_int(u16, memory[offset .. offset + 2]);
         offset += 2;
 
-        const nums_size = @bitCast(u16, getInt(i16, memory[offset .. offset + 2])) * typ.getIntWidth();
+        const nums_size: u16 = read_int(u16, memory[offset .. offset + 2]) * @as(u16, @intCast(typ.getIntWidth()));
         offset += 2;
 
-        const strings_size = @bitCast(u16, getInt(i16, memory[offset .. offset + 2])) * @sizeOf(i16);
+        const strings_size: u16 = read_int(u16, memory[offset .. offset + 2]) * @sizeOf(i16);
         offset += 2;
 
-        const str_table_size = @bitCast(u16, getInt(i16, memory[offset .. offset + 2]));
+        const str_table_size = read_int(u16, memory[offset .. offset + 2]);
         offset += 2;
 
         std.debug.assert(offset == 12);

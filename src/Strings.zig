@@ -1,6 +1,6 @@
 const std = @import("std");
-const mem = @import("mem.zig");
 const Strings = @This();
+const read_int = std.mem.readIntSliceLittle;
 
 test {
     _ = init;
@@ -30,16 +30,16 @@ pub fn init(allocator: std.mem.Allocator, strings_section: []const u8, string_ta
         // the bytes that contain the string index (little endian)
         const bytes = strings_section[byte_i .. byte_i + int_width];
         // get the byte offset into the string table
-        const str_i = mem.getInt(i16, bytes);
+        const str_i = read_int(u16, bytes);
 
         // if it is -1, it's not available
-        if (str_i == -1) {
+        if (str_i == 0xffff) {
             // this capability is not available, which is the default value
             continue;
         }
 
         // get the slice
-        const slice = strings.table.getSliceFromByteOffset(@as(usize, @bitCast(u16, str_i))) orelse continue;
+        const slice = strings.table.getSliceFromByteOffset(@as(usize, str_i)) orelse continue;
 
         // we could consider logging an error somewhere, but logging to stdout
         // is not an option, since this library is intended to be used in TUI
@@ -48,7 +48,7 @@ pub fn init(allocator: std.mem.Allocator, strings_section: []const u8, string_ta
             continue;
         }
 
-        std.log.info("parsing capability '{s}' with sequence '{s}'", .{ @tagName(@intToEnum(Capability, byte_i / int_width)), std.fmt.fmtSliceEscapeLower(slice) });
+        std.log.info("parsing capability '{s}' with sequence '{s}'", .{ @tagName(@as(Capability, @enumFromInt(byte_i / int_width))), std.fmt.fmtSliceEscapeLower(slice) });
         const sequence = try Sequence.parse(allocator, slice);
 
         // get the capability index
@@ -66,7 +66,7 @@ pub fn deinit(self: @This()) void {
 }
 
 pub fn get_value(self: *const Strings, capability: Capability) ?[]const u8 {
-    const seq = self.capabilities[@enumToInt(capability)] orelse return null;
+    const seq = self.capabilities[@intFromEnum(capability)] orelse return null;
     return switch (seq) {
         .regular => |bytes| bytes,
         .parameterized => null,
@@ -74,7 +74,7 @@ pub fn get_value(self: *const Strings, capability: Capability) ?[]const u8 {
 }
 
 pub fn get_value_with_args(self: *const Strings, alloc: std.mem.Allocator, capability: Capability, args: []const Parameter) std.mem.Allocator.Error!?[]const u8 {
-    const seq = self.capabilities[@enumToInt(capability)] orelse return null;
+    const seq = self.capabilities[@intFromEnum(capability)] orelse return null;
     var buf = std.ArrayList(u8).init(alloc);
     switch (seq) {
         .regular => |bytes| return try alloc.dupe(u8, bytes),
@@ -121,7 +121,7 @@ pub const Iter = struct {
         defer self.index += 1;
 
         return Item{
-            .capability = @intToEnum(Capability, self.index),
+            .capability = @enumFromInt(self.index),
             .value = value,
         };
     }
@@ -141,10 +141,10 @@ pub const Table = struct {
         const S = struct {
             pub fn cmp(ctx: void, key: usize, mid_item: []const u8) std.math.Order {
                 _ = ctx;
-                return std.math.order(key, @ptrToInt(mid_item.ptr));
+                return std.math.order(key, @intFromPtr(mid_item.ptr));
             }
         };
-        const target_ptr = @ptrToInt(self.data.ptr) + byte_offset;
+        const target_ptr = @intFromPtr(self.data.ptr) + byte_offset;
         const index = std.sort.binarySearch([]const u8, target_ptr, self.slices, {}, S.cmp) orelse return null;
         return self.slices[index];
     }
@@ -1057,7 +1057,7 @@ pub const ParameterizedSequence = struct {
                 .push_strlen_pop => {
                     const val = stack.pop().?;
                     const str = val.string;
-                    try stack.push(.{ .integer = @intCast(i32, str.len) });
+                    try stack.push(.{ .integer = @intCast(str.len) });
                 },
                 .bin_op => |op| {
                     const lhs = stack.pop().?;

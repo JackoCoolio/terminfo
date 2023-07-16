@@ -7,7 +7,7 @@ pub fn parse(comptime N: type, section: []const u8) [num_capabilities]?i32 {
     var i: usize = 0;
     while (i < section.len) : (i += int_width) {
         const cap_index = i / int_width;
-        const bytes: *const [int_width]u8 = @ptrCast(*const [int_width]u8, section[i .. i + int_width]);
+        const bytes: *const [int_width]u8 = @ptrCast(section[i .. i + int_width]);
         const int = std.mem.readIntLittle(N, bytes);
         caps[cap_index] = if (int == -1) null else @as(?i32, int);
     }
@@ -97,6 +97,8 @@ pub const NumericCapabilities = struct {
     bit_image_type: ?i32,
 
     pub fn init(comptime N: type, section: []const u8) Self {
+        const read_int = std.mem.readIntSliceLittle;
+
         const int_width = @sizeOf(N);
         var capabilities: NumericCapabilities = std.mem.zeroes(NumericCapabilities);
         const fields = @typeInfo(NumericCapabilities).Struct.fields;
@@ -106,7 +108,7 @@ pub const NumericCapabilities = struct {
                 break;
             }
             const bytes = section[int_i .. int_i + int_width];
-            const value = @import("mem.zig").getInt(N, bytes);
+            const value = read_int(N, bytes);
 
             if (value == -1) {
                 // value of -1 means capability isn't supported
