@@ -2,6 +2,7 @@ const std = @import("std");
 pub const bools = @import("bools.zig");
 pub const nums = @import("nums.zig");
 pub const Strings = @import("Strings.zig");
+const Dirs = @import("Dirs.zig");
 
 test {
     _ = TermInfo.initFromEnv;
@@ -67,20 +68,14 @@ pub const TermInfo = struct {
             return error.InvalidTermName;
         }
 
-        const first_char = term[0];
-        var path_buf: [64]u8 = undefined;
-        const path = std.fmt.bufPrint(&path_buf, "/usr/share/terminfo/{c}/{s}", .{ first_char, term }) catch {
-            return error.InvalidTermName;
-        };
+        const dirs = try Dirs.init(allocator);
+        const file = dirs.find_entry(term) orelse return error.MissingTermInfoFile;
 
-        return try initFromFile(allocator, path);
+        return try initFromFile(allocator, file);
     }
 
     pub const InitFromFileError = std.fs.File.OpenError || std.fs.File.ReadError || InitFromMemoryError;
-    pub fn initFromFile(allocator: std.mem.Allocator, filepath: []const u8) InitFromFileError!Self {
-        const file = try std.fs.openFileAbsolute(filepath, std.fs.File.OpenFlags{
-            .mode = .read_only,
-        });
+    pub fn initFromFile(allocator: std.mem.Allocator, file: std.fs.File) InitFromFileError!Self {
         var buf: [4096]u8 = undefined;
         _ = try file.read(&buf);
         return try Self.initFromMemory(allocator, &buf);
