@@ -79,7 +79,7 @@ pub fn get_value_with_args(self: *const Strings, alloc: std.mem.Allocator, capab
     switch (seq) {
         .regular => |bytes| return try alloc.dupe(u8, bytes),
         .parameterized => |parameterized| {
-            var writer = buf.writer();
+            const writer = buf.writer();
             parameterized.write(alloc, writer, args) catch unreachable;
             return try buf.toOwnedSlice();
         },

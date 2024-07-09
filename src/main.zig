@@ -190,7 +190,7 @@ pub const Names = struct {
             const name_len: u16 = end - start;
             const is_empty = name_len == 0;
             if (!is_empty) {
-                var dest: []u8 = try allocator.alloc(u8, name_len);
+                const dest: []u8 = try allocator.alloc(u8, name_len);
                 @memcpy(dest, section[start..end]);
                 try names.append(dest);
             }
