@@ -1,14 +1,13 @@
 const std = @import("std");
 
 pub fn parse(comptime N: type, section: []const u8) [num_capabilities]?i32 {
-    const int_width = @sizeOf(N);
+    const int_width = @divExact(@typeInfo(N).Int.bits, 8);
     var caps: [num_capabilities]?i32 = undefined;
     @memset(&caps, null);
     var i: usize = 0;
     while (i < section.len) : (i += int_width) {
         const cap_index = i / int_width;
-        const bytes: *const [int_width]u8 = @ptrCast(section[i .. i + int_width]);
-        const int = std.mem.readIntLittle(N, bytes);
+        const int = std.mem.readInt(N, section[i..][0..int_width], .little);
         caps[cap_index] = if (int == -1) null else @as(?i32, int);
     }
     return caps;
@@ -97,9 +96,7 @@ pub const NumericCapabilities = struct {
     bit_image_type: ?i32,
 
     pub fn init(comptime N: type, section: []const u8) Self {
-        const read_int = std.mem.readIntSliceLittle;
-
-        const int_width = @sizeOf(N);
+        const int_width = @divExact(@typeInfo(N).Int.bits, 8);
         var capabilities: NumericCapabilities = std.mem.zeroes(NumericCapabilities);
         const fields = @typeInfo(NumericCapabilities).Struct.fields;
         var int_i: usize = 0;
@@ -107,8 +104,8 @@ pub const NumericCapabilities = struct {
             if (int_i >= section.len) {
                 break;
             }
-            const bytes = section[int_i .. int_i + int_width];
-            const value = read_int(N, bytes);
+            const bytes = section[int_i..][0..int_width];
+            const value = std.mem.readInt(N, bytes, .little);
 
             if (value == -1) {
                 // value of -1 means capability isn't supported

@@ -1,6 +1,5 @@
 const std = @import("std");
 const Strings = @This();
-const read_int = std.mem.readIntSliceLittle;
 
 test {
     _ = init;
@@ -28,9 +27,9 @@ pub fn init(allocator: std.mem.Allocator, strings_section: []const u8, string_ta
         }
 
         // the bytes that contain the string index (little endian)
-        const bytes = strings_section[byte_i .. byte_i + int_width];
+        const bytes = strings_section[byte_i..][0..int_width];
         // get the byte offset into the string table
-        const str_i = read_int(u16, bytes);
+        const str_i = std.mem.readInt(u16, bytes, .little);
 
         // if it is -1, it's not available
         if (str_i == 0xffff) {

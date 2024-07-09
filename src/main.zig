@@ -85,10 +85,8 @@ pub const TermInfo = struct {
         NotATermInfoError,
     } || std.mem.Allocator.Error;
     pub fn initFromMemory(allocator: std.mem.Allocator, memory: []const u8) InitFromMemoryError!Self {
-        const read_int = std.mem.readIntSliceLittle;
-
         var offset: usize = 0;
-        const magic_number = read_int(u16, memory[offset .. offset + 2]);
+        const magic_number = std.mem.readInt(u16, memory[offset..][0..2], .little);
         offset += 2;
 
         const typ: Type = switch (magic_number) {
@@ -104,19 +102,19 @@ pub const TermInfo = struct {
         };
 
         // get section sizes
-        const term_names_size = read_int(u16, memory[offset .. offset + 2]);
+        const term_names_size = std.mem.readInt(u16, memory[offset..][0..2], .little);
         offset += 2;
 
-        const bools_size: u16 = read_int(u16, memory[offset .. offset + 2]);
+        const bools_size: u16 = std.mem.readInt(u16, memory[offset..][0..2], .little);
         offset += 2;
 
-        const nums_size: u16 = read_int(u16, memory[offset .. offset + 2]) * @as(u16, @intCast(typ.getIntWidth()));
+        const nums_size: u16 = std.mem.readInt(u16, memory[offset..][0..2], .little) * @as(u16, @intCast(typ.getIntWidth()));
         offset += 2;
 
-        const strings_size: u16 = read_int(u16, memory[offset .. offset + 2]) * @sizeOf(i16);
+        const strings_size: u16 = std.mem.readInt(u16, memory[offset..][0..2], .little) * @sizeOf(i16);
         offset += 2;
 
-        const str_table_size = read_int(u16, memory[offset .. offset + 2]);
+        const str_table_size = std.mem.readInt(u16, memory[offset..][0..2], .little);
         offset += 2;
 
         std.debug.assert(offset == 12);
