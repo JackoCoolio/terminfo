@@ -46,9 +46,9 @@ pub const TermInfo = struct {
     }
 
     /// Deinitializes and frees memory.
-    pub fn deinit(self: Self) void {
+    pub fn deinit(self: Self, alloc: std.mem.Allocator) void {
         self.names.deinit();
-        self.strings.deinit();
+        self.strings.deinit(alloc);
     }
 
     pub const InitFromEnvError = std.process.GetEnvVarOwnedError || InitFromTermError;
@@ -69,6 +69,7 @@ pub const TermInfo = struct {
         }
 
         const dirs = try Dirs.init(allocator);
+        defer dirs.deinit();
         const file = dirs.find_entry(term) orelse return error.MissingTermInfoFile;
 
         return try initFromFile(allocator, file);

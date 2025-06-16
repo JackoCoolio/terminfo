@@ -89,5 +89,5 @@ fn deinit_dirs(alloc: Allocator, dirs: []const Dir) void {
 }
 
 pub fn deinit(self: Dirs) void {
-    deinit_dirs(self.alloc, self.dirs.items);
+    deinit_dirs(self.alloc, self.dirs);
 }

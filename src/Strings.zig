@@ -60,7 +60,12 @@ pub fn init(allocator: std.mem.Allocator, strings_section: []const u8, string_ta
 }
 
 /// Releases all allocated memory.
-pub fn deinit(self: @This()) void {
+pub fn deinit(self: @This(), alloc: std.mem.Allocator) void {
+    for (self.capabilities) |opt_cap| {
+        if (opt_cap) |cap| {
+            cap.deinit(alloc);
+        }
+    }
     self.table.deinit();
 }
 
@@ -716,6 +721,8 @@ pub const Formatted = struct {
         switch (param) {
             .integer => |value| {
                 var buf = try std.ArrayList(u8).initCapacity(alloc, self.width);
+                defer buf.deinit();
+
                 switch (self.conversion) {
                     .decimal => try std.fmt.format(buf.writer(), "{d}", .{value}),
                     .lower_hex => try std.fmt.format(buf.writer(), "{x}", .{value}),
@@ -849,13 +856,17 @@ pub const Sequence = union(enum) {
     pub fn parse(alloc: std.mem.Allocator, seq: []const u8) std.mem.Allocator.Error!Sequence {
         const param_seq = try ParameterizedSequence.parse(alloc, seq);
         if (param_seq.n_params == 0) {
-            return .{
-                .regular = seq,
-            };
+            param_seq.deinit(alloc);
+            return .{ .regular = seq };
         } else {
-            return .{
-                .parameterized = param_seq,
-            };
+            return .{ .parameterized = param_seq };
+        }
+    }
+
+    pub fn deinit(self: Sequence, alloc: std.mem.Allocator) void {
+        switch (self) {
+            .parameterized => |p| p.deinit(alloc),
+            else => {},
         }
     }
 };
@@ -998,6 +1009,10 @@ pub const ParameterizedSequence = struct {
             .n_params = n_params,
             .actions = try actions.toOwnedSlice(),
         };
+    }
+
+    pub fn deinit(self: ParameterizedSequence, alloc: std.mem.Allocator) void {
+        alloc.free(self.actions);
     }
 
     pub const WriteError = error{WriterError} || std.mem.Allocator.Error;
